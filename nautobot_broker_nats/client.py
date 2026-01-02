@@ -24,16 +24,17 @@ max_age = 60
 
 # NATS wraps the official NATS library for Python, which requires asyncio.
 class NATS:
-    def __init__(self,
-            attempt: int=10,
-            servers: typing.Iterable[str]=["nats://127.0.0.1:4222"],
-            stream:  typing.Optional[str]=None,
-            subject: str="nautobot", **kwargs
-        ) -> None:
-
+    def __init__(
+        self,
+        attempt: int = 10,
+        servers: typing.Iterable[str] = ["nats://127.0.0.1:4222"],
+        stream: typing.Optional[str] = None,
+        subject: str = "nautobot",
+        **kwargs,
+    ) -> None:
         self.attempt = attempt
         self.servers = servers
-        self.stream  = stream
+        self.stream = stream
         self.subject = subject
 
         # All other arguments are treated as connection parameters.
@@ -53,9 +54,7 @@ class NATS:
             loop.run_until_complete(self._disconnect())
 
     def publish(self, data: dict) -> None:
-        msg = orjson.dumps(data,
-            default = lambda obj: str(obj)
-        )
+        msg = orjson.dumps(data, default=lambda obj: str(obj))
 
         with lock:
             loop.run_until_complete(self._publish(msg))
@@ -109,7 +108,7 @@ class NATS:
                 await self._disconnect()
 
                 # Last attempt? Propagate the exception to the caller.
-                if n+1 == self.attempt:
+                if n + 1 == self.attempt:
                     raise e
 
                 # Trying again? Sleep for a bit.

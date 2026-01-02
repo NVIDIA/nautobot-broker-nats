@@ -4,8 +4,6 @@
 
 import logging
 
-__all__ = [
-    "log"
-]
+__all__ = ["log"]
 
 log = logging.getLogger("nautobot.broker.nats")

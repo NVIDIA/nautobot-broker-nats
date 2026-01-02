@@ -72,7 +72,7 @@ class NATSEventBroker(EventBroker):
             "@timestamp": timestamp,
             "response": {
                 "host": self.hostname,
-            }
+            },
         }
 
         return {**data, **base}
@@ -100,11 +100,11 @@ class NATSEventBroker(EventBroker):
 
         message = {
             "request": {
-                "id":   data["context"]["request_id"],
+                "id": data["context"]["request_id"],
                 "user": data["context"]["user_name"],
             },
-            "event":  event,
-            "model":  model,
+            "event": event,
+            "model": model,
             "record": record,
         }
 
@@ -119,9 +119,7 @@ class NATSEventBroker(EventBroker):
         if "url" in record:
             message["@url"] = record["url"]
 
-        self.client.publish(
-            self.message(message)
-        )
+        self.client.publish(self.message(message))
 
     def signal(self, event, instance, **kwargs) -> None:
         # Construct the full model name.
@@ -136,11 +134,13 @@ class NATSEventBroker(EventBroker):
         from nautobot.core.models.utils import serialize_object_v2
 
         self.client.publish(
-            self.message({
-                "event":  event,
-                "model":  model,
-                "record": serialize_object_v2(instance),
-            })
+            self.message(
+                {
+                    "event": event,
+                    "model": model,
+                    "record": serialize_object_v2(instance),
+                }
+            )
         )
 
     def signal_create(self, instance, **kwargs):
