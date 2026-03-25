@@ -1,4 +1,4 @@
-[tool.poetry]
+[project]
 authors     = [
     {name = "Eric Busto", email =  "ebusto@nvidia.com"},
     {name = "Kyle Fischer", email =  "kfischer@nvidia.com"}
@@ -7,7 +7,7 @@ description = "Publish changes to NATS"
 name        = "nautobot-broker-nats"
 packages    = [{include = "nautobot_broker_nats"}]
 readme      = "README.md"
-version     = "1.1.0"
+version     = "1.1.1"
 
 [tool.poetry.dependencies]
 dictdiffer = "^0.9.0"
@@ -15,6 +15,8 @@ nats-py    = "^2.10.0"
 nkeys      = "^0.2.1"
 orjson     = "^3.10.15"
 python     = ">=3.11,<4.0"
+djlint = "^1.36.4"
+shell = "^1.0.1"
 
 [tool.poetry.group.dev.dependencies]
 pylint        = "^3.3"
@@ -69,6 +71,13 @@ disable = [
     "too-many-ancestors",
     "fixme",
 ]
+
+[tool.pylint.miscellaneous]
+# Don't flag TODO as a failure, let us commit with things that still need to be done in the code
+notes = """,
+    FIXME,
+    XXX,
+    """
 
 [tool.ruff]
 line-length = 100
@@ -128,3 +137,7 @@ convention = "google"
     "D",
     "S"
 ]
+
+[tool.djlint]
+profile = "django"
+ignore = "H021,T002"
