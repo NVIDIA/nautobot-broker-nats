@@ -1,21 +1,22 @@
 #  SPDX-FileCopyrightText: Copyright (c) "2025" NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #  SPDX-License-Identifier: APACHE 2.0
 
-
-import dictdiffer
-import orjson
 import re
 import socket
 import time
 
-from django.db.models.signals import post_delete, post_save
-
-from nautobot.core.events import EventBroker
+import dictdiffer
+import orjson
 
 from .client import NATS
 
+from django.db.models.signals import post_delete, post_save
+from nautobot.core.events import EventBroker
+
 
 class NATSEventBroker(EventBroker):
+    """Publishes changelog events to NATs queues."""
+
     def __init__(self, *args, **kwargs):
         # Ignore uninteresting or sensitive topics.
         self.exclude_topics = [
@@ -42,8 +43,8 @@ class NATSEventBroker(EventBroker):
         post_delete.connect(self.signal_delete)
         post_save.connect(self.signal_create)
 
-    # Return the difference between two records represented as dictionaries.
     def diff(self, a: dict, b: dict) -> dict:
+        """Return the difference between two records represented as dictionaries."""
         detail = {}
 
         for diff in dictdiffer.diff(a, b, expand=True):
@@ -63,8 +64,8 @@ class NATSEventBroker(EventBroker):
 
         return detail
 
-    # Return a message, merged with the contents of data.
     def message(self, data: dict) -> dict:
+        """Return a message, merged with the contents of data."""
         # Although the payload has a timestamp, it is not RFC3339 compliant.
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -77,8 +78,8 @@ class NATSEventBroker(EventBroker):
 
         return {**data, **base}
 
-    # Publish is called by the event broker system when an event occurs.
     def publish(self, *, topic: str, payload: str) -> None:
+        """Publish is called by the event broker system when an event occurs."""
         match = self.pattern.match(topic)
 
         # Is this not a topic we're interested in?
@@ -122,6 +123,7 @@ class NATSEventBroker(EventBroker):
         self.client.publish(self.message(message))
 
     def signal(self, event, instance, **kwargs) -> None:
+        """Constructs the return signal."""
         # Construct the full model name.
         model = instance._meta.app_label + "." + instance._meta.model_name
 
@@ -143,8 +145,8 @@ class NATSEventBroker(EventBroker):
             )
         )
 
-    def signal_create(self, instance, **kwargs):
+    def signal_create(self, instance, **kwargs): # noqa: D102
         self.signal("create", instance, **kwargs)
 
-    def signal_delete(self, instance, **kwargs):
+    def signal_delete(self, instance, **kwargs): # noqa: D102
         self.signal("delete", instance, **kwargs)
