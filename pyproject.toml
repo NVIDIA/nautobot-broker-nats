@@ -1,5 +1,8 @@
 [tool.poetry]
-authors     = ["Eric Busto <ebusto@nvidia.com>"]
+authors     = [
+    {name = "Eric Busto", email =  "ebusto@nvidia.com"},
+    {name = "Kyle Fischer", email =  "kfischer@nvidia.com"}
+]
 description = "Publish changes to NATS"
 name        = "nautobot-broker-nats"
 packages    = [{include = "nautobot_broker_nats"}]
@@ -73,12 +76,10 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = [
-    "B",  # flake8-bugbear
     "D",  # pydocstyle
     "E",  # pycodestyle error
     "F",  # pyflakes
     "I",  # isort
-    "PL", # pylint
     "S",  # bandit
     "W",  # pycodestyle warning
 ]
@@ -95,6 +96,14 @@ ignore = [
     # """
     # We've discussed and concluded that we consider this to be a valid style choice.
     "D212", # Multi-line docstring summary should start at the first line
+    "D213", # Multi-line docstring summary should start at the second line
+
+    # Produces a lot of issues in the current codebase.
+    "D401", # First line of docstring should be in imperative mood
+    "D407", # Missing dashed underline after section
+    "D416", # Section name ends in colon
+    "D107", # Missing docstring in `__init__`
+    "E501", # Line too long
 ]
 
 [tool.ruff.lint.isort]
