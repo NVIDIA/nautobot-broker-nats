@@ -6,12 +6,11 @@ import socket
 import time
 
 import dictdiffer
+from django.db.models.signals import post_delete, post_save
+from nautobot.core.events import EventBroker
 import orjson
 
 from .client import NATS
-
-from django.db.models.signals import post_delete, post_save
-from nautobot.core.events import EventBroker
 
 
 class NATSEventBroker(EventBroker):

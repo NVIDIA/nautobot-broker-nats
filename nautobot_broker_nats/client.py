@@ -7,6 +7,7 @@ import atexit
 import threading
 import time
 import typing
+
 import nats
 import orjson
 
