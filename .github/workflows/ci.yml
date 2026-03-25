@@ -33,7 +33,3 @@ jobs:
 
       - name: Lint with ruff
         run: ruff check nautobot_broker_nats/
-
-      # TODO: Enable pylint after inital merge into github
-      # - name: Lint with pylint
-      #   run: pylint nautobot_broker_nats/
