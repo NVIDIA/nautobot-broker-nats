@@ -25,6 +25,7 @@ max_age = 60
 
 class NATS:
     """Wraps the official NATS library for Python, which requires asyncio."""
+
     def __init__(
         self,
         attempt: int = 10,
@@ -50,11 +51,11 @@ class NATS:
         # Ensure a graceful disconnect.
         atexit.register(self.disconnect)
 
-    def disconnect(self) -> None: # noqa: D102
+    def disconnect(self) -> None:  # noqa: D102
         with lock:
             loop.run_until_complete(self._disconnect())
 
-    def publish(self, data: dict) -> None: # noqa: D102
+    def publish(self, data: dict) -> None:  # noqa: D102
         msg = orjson.dumps(data, default=lambda obj: str(obj))
 
         with lock:

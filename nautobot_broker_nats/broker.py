@@ -144,8 +144,8 @@ class NATSEventBroker(EventBroker):
             )
         )
 
-    def signal_create(self, instance, **kwargs): # noqa: D102
+    def signal_create(self, instance, **kwargs):  # noqa: D102
         self.signal("create", instance, **kwargs)
 
-    def signal_delete(self, instance, **kwargs): # noqa: D102
+    def signal_delete(self, instance, **kwargs):  # noqa: D102
         self.signal("delete", instance, **kwargs)
