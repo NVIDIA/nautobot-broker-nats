@@ -4,11 +4,12 @@
 
 import asyncio
 import atexit
-import nats
-import orjson
 import threading
 import time
 import typing
+
+import nats
+import orjson
 
 from .log import log
 
@@ -22,8 +23,9 @@ loop = asyncio.new_event_loop()
 max_age = 60
 
 
-# NATS wraps the official NATS library for Python, which requires asyncio.
 class NATS:
+    """Wraps the official NATS library for Python, which requires asyncio."""
+
     def __init__(
         self,
         attempt: int = 10,
@@ -49,11 +51,11 @@ class NATS:
         # Ensure a graceful disconnect.
         atexit.register(self.disconnect)
 
-    def disconnect(self) -> None:
+    def disconnect(self) -> None:  # noqa: D102
         with lock:
             loop.run_until_complete(self._disconnect())
 
-    def publish(self, data: dict) -> None:
+    def publish(self, data: dict) -> None:  # noqa: D102
         msg = orjson.dumps(data, default=lambda obj: str(obj))
 
         with lock:

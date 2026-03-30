@@ -1,10 +1,13 @@
-[tool.poetry]
-authors     = ["Eric Busto <ebusto@nvidia.com>"]
+[project]
+authors     = [
+    {name = "Eric Busto", email =  "ebusto@nvidia.com"},
+    {name = "Kyle Fischer", email =  "kfischer@nvidia.com"}
+]
 description = "Publish changes to NATS"
 name        = "nautobot-broker-nats"
 packages    = [{include = "nautobot_broker_nats"}]
 readme      = "README.md"
-version     = "1.1.0"
+version     = "1.1.1"
 
 [tool.poetry.dependencies]
 dictdiffer = "^0.9.0"
@@ -12,6 +15,8 @@ nats-py    = "^2.10.0"
 nkeys      = "^0.2.1"
 orjson     = "^3.10.15"
 python     = ">=3.11,<4.0"
+djlint = "^1.36.4"
+shell = "^1.0.1"
 
 [tool.poetry.group.dev.dependencies]
 pylint        = "^3.3"
@@ -67,24 +72,30 @@ disable = [
     "fixme",
 ]
 
+[tool.pylint.miscellaneous]
+# Don't flag TODO as a failure, let us commit with things that still need to be done in the code
+notes = """,
+    FIXME,
+    XXX,
+    """
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
 select = [
-    "B",  # flake8-bugbear
     "D",  # pydocstyle
     "E",  # pycodestyle error
     "F",  # pyflakes
     "I",  # isort
-    "PL", # pylint
     "S",  # bandit
     "W",  # pycodestyle warning
 ]
 ignore = [
-    # D105 enforces docstrings for magic methods, e.g. __str__(). It seems unnecessary.
-    "D105",
+    "D100", # D100 enforces docstrings for public methods, including our log file.
+    "D105", # D105 enforces docstrings for magic methods, e.g. __str__(). It seems unnecessary.
+    "D107", # Missing docstring in `__init__`
 
     # warning: `one-blank-line-before-class` (D203) and `no-blank-line-before-class` (D211) are incompatible.
     "D203", # 1 blank line required before class docstring
@@ -95,6 +106,13 @@ ignore = [
     # """
     # We've discussed and concluded that we consider this to be a valid style choice.
     "D212", # Multi-line docstring summary should start at the first line
+    "D213", # Multi-line docstring summary should start at the second line
+
+    # Produces a lot of issues in the current codebase.
+    "D401", # First line of docstring should be in imperative mood
+    "D407", # Missing dashed underline after section
+    "D416", # Section name ends in colon
+    "E501", # Line too long
 ]
 
 [tool.ruff.lint.isort]
@@ -119,3 +137,7 @@ convention = "google"
     "D",
     "S"
 ]
+
+[tool.djlint]
+profile = "django"
+ignore = "H021,T002"
