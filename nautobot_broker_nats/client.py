@@ -5,8 +5,8 @@
 import asyncio
 import atexit
 import threading
-import time
 import typing
+import uuid
 
 import nats
 import orjson
@@ -18,9 +18,6 @@ lock = threading.Lock()
 
 # Create the event loop.
 loop = asyncio.new_event_loop()
-
-# Maximum connection age.
-max_age = 60
 
 
 class NATS:
@@ -42,16 +39,20 @@ class NATS:
         # All other arguments are treated as connection parameters.
         self.connect = kwargs
 
-        # Initialize the NATS connection, JetStream context, and last used
-        # timestamp attributes.
+        # Initialize the NATS connection and JetStream context.
         self.nc = None
         self.js = None
-        self.ts = None
 
-        # Ensure a graceful disconnect.
+        # Ensure a graceful disconnect on process exit.
         atexit.register(self.disconnect)
 
     def disconnect(self) -> None:  # noqa: D102
+        # Guard against calling run_until_complete on a closed loop (e.g. if
+        # Python's own asyncio cleanup has already closed it during interpreter
+        # shutdown).
+        if loop.is_closed():
+            return
+
         with lock:
             loop.run_until_complete(self._disconnect())
 
@@ -64,7 +65,6 @@ class NATS:
     async def _connect(self) -> None:
         # Connect to NATS.
         self.nc = await nats.connect(servers=self.servers, **self.connect)
-        self.ts = time.time()
 
         # Retrieve the JetStream context, and ensure the stream exists. This
         # will raise an exception if it does not.
@@ -74,50 +74,63 @@ class NATS:
             await self.js.stream_info(self.stream)
 
     async def _disconnect(self) -> None:
-        # If necessary, disconnect from NATS.
+        # If necessary, disconnect from NATS. The close is best-effort; if the
+        # server already closed the TLS connection (e.g. due to missed pings),
+        # the SSL teardown will fail harmlessly.
         if self.nc:
-            await self.nc.close()
+            # drain() flushes any buffered outgoing messages before closing,
+            # which is safer than close(). Fall back to close() if drain fails
+            # (e.g. the connection is already broken).
+            try:
+                await self.nc.drain()
+            except Exception:
+                try:
+                    await self.nc.close()
+                except Exception as e:
+                    log.warning("disconnect: %s" % e)
 
         self.nc = None
         self.js = None
-        self.ts = None
 
     # Publish the message, retrying if necessary with an increasing delay
     # between attempts.
     async def _publish(self, msg: bytes) -> None:
-        # Force a reconnect if the connection has not been used recently.
-        if self.ts and time.time() - self.ts >= max_age:
-            await self._disconnect()
+        # Generate a stable message ID for this publish call so that JetStream
+        # can deduplicate retries. Without a stable ID, a retry after an ACK
+        # timeout could land the same message in the stream twice.
+        msg_id = str(uuid.uuid4())
 
         for n in range(self.attempt):
             try:
-                # Connect if necessary.
-                if not self.nc:
+                # Connect (or reconnect) if the connection is absent or closed.
+                if not self.nc or self.nc.is_closed:
                     await self._connect()
 
                 if self.stream:
-                    # JetStream publish. There is no need to flush.
-                    await self.js.publish(self.subject, msg)
+                    # JetStream publish. The server sends an ACK confirming the
+                    # message is durably stored before this returns; a missing
+                    # ACK means the message was NOT stored and we must retry.
+                    await self.js.publish(self.subject, msg, headers={"Nats-Msg-Id": msg_id})
                 else:
-                    # Core publish.
+                    # Core publish. There is no server-side ACK; flush ensures
+                    # the bytes have left the TCP send buffer.
                     await self.nc.publish(self.subject, msg)
                     await self.nc.flush()
 
             except Exception as e:
                 log.warning("publish [%d]: %s" % (n, e))
 
-                # Force a reconnect.
+                # Force a reconnect before the next attempt.
                 await self._disconnect()
 
                 # Last attempt? Propagate the exception to the caller.
                 if n + 1 == self.attempt:
                     raise e
 
-                # Trying again? Sleep for a bit.
-                time.sleep(n)
+                # Non-blocking sleep: yield control to the event loop so that
+                # keepalives and other callbacks can run during the backoff.
+                await asyncio.sleep(n)
 
             else:
-                # Success!
-                self.ts = time.time()
-
+                # Success.
                 return
