@@ -3,29 +3,34 @@ authors     = [
     {name = "Eric Busto", email =  "ebusto@nvidia.com"},
     {name = "Kyle Fischer", email =  "kfischer@nvidia.com"}
 ]
-description = "Publish changes to NATS"
-name        = "nautobot-broker-nats"
-packages    = [{include = "nautobot_broker_nats"}]
-readme      = "README.md"
-version     = "1.1.1"
+dependencies = [
+    "dictdiffer>=0.9.0,<0.10.0",
+    "djlint>=1.36.4,<2.0.0",
+    "nats-py>=2.10.0,<3.0.0",
+    "nkeys>=0.2.1,<0.3.0",
+    "orjson>=3.10.15,<4.0.0",
+    "shell>=1.0.1,<2.0.0",
+]
+description     = "Publish changes to NATS"
+name            = "nautobot-broker-nats"
+readme          = "README.md"
+requires-python = ">=3.11,<4.0"
+version         = "1.2.3"
 
-[tool.poetry.dependencies]
-dictdiffer = "^0.9.0"
-nats-py    = "^2.10.0"
-nkeys      = "^0.2.1"
-orjson     = "^3.10.15"
-python     = ">=3.11,<4.0"
-djlint = "^1.36.4"
-shell = "^1.0.1"
-
-[tool.poetry.group.dev.dependencies]
-pylint        = "^3.3"
-pylint-django = "^2.6"
-ruff          = "^0.9"
+[dependency-groups]
+dev = [
+    "pylint>=3.3,<4.0",
+    "pylint-django>=2.6,<3.0",
+    "ruff>=0.9,<0.10",
+]
 
 [build-system]
-build-backend = "poetry.core.masonry.api"
-requires      = ["poetry-core"]
+build-backend = "uv_build"
+requires      = ["uv_build>=0.11.18,<0.12"]
+
+[tool.uv.build-backend]
+module-name = "nautobot_broker_nats"
+module-root = ""
 
 [tool.pylint.main]
 analyse-fallback-blocks = "no"

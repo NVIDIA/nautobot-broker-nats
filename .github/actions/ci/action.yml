@@ -1,0 +1,29 @@
+---
+name: "CI"
+description: "Common steps for all CI jobs"
+
+inputs:
+  python-version:
+    description: Python version to use.
+    required: false
+    default: "3.11"
+
+runs:
+  using: composite
+  steps:
+    - name: "Setup Environment"
+      uses: ./.github/actions/setup-environment
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: "Check formatting with ruff"
+      shell: bash
+      run: uv run ruff format --check nautobot_broker_nats/
+
+    - name: "Lint with ruff"
+      shell: bash
+      run: uv run ruff check nautobot_broker_nats/
+
+    - name: "Lock Check"
+      shell: bash
+      run: uv lock --check
