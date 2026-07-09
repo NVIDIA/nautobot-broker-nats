@@ -66,10 +66,10 @@ Publishing is handled by GitHub Actions through PyPI Trusted Publishing.
 
 The release workflow uses two tag types:
 
-- `vX.Y.ZrcN` on a commit that is not reachable from `main` exercises the release process, creates a GitHub prerelease, uploads package assets, and skips PyPI upload.
-- `vX.Y.Z` on a commit that is reachable from `main` creates a GitHub release, uploads package assets, and publishes those assets to PyPI.
+- `X.Y.Z-rc.N` on a commit that is not reachable from `main` exercises the release process, creates a GitHub prerelease, uploads package assets, and skips PyPI upload.
+- `X.Y.Z` on a commit that is reachable from `main` creates a GitHub release, uploads package assets, and publishes those assets to PyPI.
 
-The version in `pyproject.toml` must stay in stable `X.Y.Z` form. Release candidate tags use the same base version. For example, `pyproject.toml` can contain `1.2.3` while the RC tag is `v1.2.3rc1`.
+The version in `pyproject.toml` must stay in stable `X.Y.Z` form. Release candidate tags use the same base version. For example, `pyproject.toml` can contain `1.2.3` while the RC tag is `1.2.3-rc.1`.
 
 1. Update the version number in `pyproject.toml`.
 
@@ -84,7 +84,7 @@ uv lock --check
 
 ```bash
 git add pyproject.toml uv.lock
-git commit -m "Release vX.Y.Z"
+git commit -m "Release X.Y.Z"
 ```
 
 4. Exercise the release flow with a release candidate tag from the branch containing the version-change commit before it is merged to `main`.
@@ -92,8 +92,8 @@ git commit -m "Release vX.Y.Z"
 ```bash
 git checkout <release-branch>
 git push origin HEAD
-git tag vX.Y.Zrc1
-git push origin vX.Y.Zrc1
+git tag X.Y.Z-rc.1
+git push origin X.Y.Z-rc.1
 ```
 
 Expected result: GitHub Actions validates the tag, builds the package, creates a prerelease, uploads the package assets, and skips PyPI publishing.
@@ -103,8 +103,8 @@ Expected result: GitHub Actions validates the tag, builds the package, creates a
 ```bash
 git checkout main
 git pull --ff-only
-git tag vX.Y.Z
-git push origin vX.Y.Z
+git tag X.Y.Z
+git push origin X.Y.Z
 ```
 
 Expected result: GitHub Actions validates the tag, builds the package, creates a release, uploads the package assets, and publishes to PyPI.
