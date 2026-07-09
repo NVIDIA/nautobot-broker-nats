@@ -10,11 +10,14 @@ on:
       - "main"
       - "dev"
       - "ltm-*"
-  pull_request: ~
+  pull_request:
+    types:
+      - "labeled"
 
 jobs:
   ci:
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.label.name == 'Run CICD')
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
