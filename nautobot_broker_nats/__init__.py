@@ -4,6 +4,8 @@
 
 import typing
 
+# Importing broker eagerly pulls in nautobot.core.events, which requires
+# configured Django settings. Keep client-only consumers and tests importable.
 if typing.TYPE_CHECKING:
     from .broker import NATSEventBroker as NATSEventBroker
 

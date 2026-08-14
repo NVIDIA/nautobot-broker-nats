@@ -4,6 +4,7 @@
 
 import asyncio
 import atexit
+import concurrent.futures
 import os
 import threading
 import typing
@@ -13,6 +14,10 @@ import nats
 import orjson
 
 from .log import log
+
+EVENT_LOOP_START_TIMEOUT = 5
+DISCONNECT_TIMEOUT = 5
+EVENT_LOOP_STOP_TIMEOUT = 5
 
 
 class NATS:
@@ -43,6 +48,8 @@ class NATS:
         # so an idle connection can process server pings and disconnects.
         self._loop = None
         self._loop_thread = None
+        self._loop_ready = None
+        self._loop_start_error = None
         self._publish_lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._pid = os.getpid()
@@ -60,56 +67,127 @@ class NATS:
         if self._pid != os.getpid():
             self._reset_after_fork()
 
+        # A synchronous wait on a coroutine submitted to the current event
+        # loop would deadlock. Schedule the shutdown and let the loop stop
+        # itself after the disconnect completes instead.
+        if threading.current_thread() is self._loop_thread:
+            self._disconnect_from_event_loop()
+            return
+
         with self._publish_lock:
-            loop = self._loop
-            loop_thread = self._loop_thread
-            if not loop or not loop_thread or not loop_thread.is_alive():
-                self.nc = None
-                self.js = None
-                self._loop = None
-                self._loop_thread = None
-                return
-
-            try:
-                asyncio.run_coroutine_threadsafe(self._disconnect(), loop).result()
-            finally:
-                loop.call_soon_threadsafe(loop.stop)
-                if threading.current_thread() is not loop_thread:
-                    loop_thread.join()
-
-                with self._lifecycle_lock:
+            with self._lifecycle_lock:
+                loop = self._loop
+                loop_thread = self._loop_thread
+                if not loop or not loop_thread or not loop_thread.is_alive():
                     self.nc = None
                     self.js = None
                     self._loop = None
                     self._loop_thread = None
+                    self._loop_ready = None
+                    self._loop_start_error = None
+                    return
+
+            future = None
+            coroutine = self._disconnect()
+            try:
+                future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+                future.result(timeout=DISCONNECT_TIMEOUT)
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                log.warning("disconnect timed out after %s seconds", DISCONNECT_TIMEOUT)
+            except Exception as exc:  # Best-effort cleanup, especially during atexit.
+                if future is None:
+                    coroutine.close()
+                log.warning("disconnect: %s", exc)
+            finally:
+                try:
+                    loop.call_soon_threadsafe(loop.stop)
+                except RuntimeError:
+                    pass
+
+                loop_thread.join(timeout=EVENT_LOOP_STOP_TIMEOUT)
+                if loop_thread.is_alive():
+                    log.warning(
+                        "event loop thread did not stop after %s seconds",
+                        EVENT_LOOP_STOP_TIMEOUT,
+                    )
+
+                with self._lifecycle_lock:
+                    if self._loop is loop:
+                        self.nc = None
+                        self.js = None
+                        self._loop = None
+                    if self._loop_thread is loop_thread:
+                        self._loop_thread = None
+                        self._loop_ready = None
+                        self._loop_start_error = None
+
+    def _disconnect_from_event_loop(self) -> None:
+        """Disconnect without blocking when called by the event loop thread."""
+        loop = self._loop
+        if not loop or loop.is_closed():
+            return
+
+        async def disconnect_and_stop() -> None:
+            try:
+                await self._disconnect()
+            finally:
+                loop.stop()
+
+        loop.create_task(disconnect_and_stop())
 
     def _reset_after_fork(self) -> None:
         """Reset state inherited from a parent process."""
+        # Do not drain the inherited connection: protocol I/O from the child
+        # would use the parent's underlying socket. Drop process-local object
+        # state and let the child establish its own connection lazily.
         self.nc = None
         self.js = None
         self._loop = None
         self._loop_thread = None
+        self._loop_ready = None
+        self._loop_start_error = None
         self._publish_lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._pid = os.getpid()
 
     def _run_event_loop(self, ready: threading.Event) -> None:
         """Run the nats-py event loop until disconnect stops it."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        self._loop = loop
-        ready.set()
+        loop = None
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self._loop = loop
+        except BaseException as exc:  # Always release a waiter if thread setup fails.
+            self._loop_start_error = exc
+        finally:
+            ready.set()
+
+        if not loop or self._loop_start_error:
+            if loop and not loop.is_closed():
+                loop.close()
+            return
 
         try:
             loop.run_forever()
         finally:
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                task.cancel()
-            if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.close()
+            try:
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                loop.close()
+                with self._lifecycle_lock:
+                    if self._loop is loop:
+                        self.nc = None
+                        self.js = None
+                        self._loop = None
+                    if self._loop_thread is threading.current_thread():
+                        self._loop_thread = None
+                        self._loop_ready = None
 
     def _ensure_event_loop(self) -> asyncio.AbstractEventLoop:
         """Start the process-local event loop thread when first needed."""
@@ -117,36 +195,83 @@ class NATS:
             self._reset_after_fork()
 
         with self._lifecycle_lock:
-            if self._loop and self._loop_thread and self._loop_thread.is_alive():
+            if (
+                self._loop
+                and not self._loop.is_closed()
+                and self._loop_thread
+                and self._loop_thread.is_alive()
+            ):
                 return self._loop
 
-            # A connection belongs to the loop that created it. If that loop
-            # exited unexpectedly, discard its connection state rather than
-            # attempting to reuse it from the replacement loop.
-            self.nc = None
-            self.js = None
-            self._loop = None
+            if self._loop_thread and self._loop_thread.is_alive() and self._loop_ready:
+                ready = self._loop_ready
+            else:
+                # A connection belongs to the loop that created it. If that
+                # loop exited unexpectedly, discard its connection state rather
+                # than attempting to reuse it from the replacement loop.
+                self.nc = None
+                self.js = None
+                self._loop = None
+                self._loop_start_error = None
 
-            ready = threading.Event()
-            self._loop_thread = threading.Thread(
-                target=self._run_event_loop,
-                args=(ready,),
-                name="nautobot-broker-nats",
-                daemon=True,
-            )
-            self._loop_thread.start()
-            ready.wait()
+                ready = threading.Event()
+                self._loop_ready = ready
+                self._loop_thread = threading.Thread(
+                    target=self._run_event_loop,
+                    args=(ready,),
+                    name=f"nautobot-broker-nats-{id(self):x}",
+                    daemon=True,
+                )
+                self._loop_thread.start()
 
-            if not self._loop:
-                raise RuntimeError("Failed to start the NATS event loop")
+            if not ready.wait(timeout=EVENT_LOOP_START_TIMEOUT):
+                raise RuntimeError(
+                    f"NATS event loop did not start within {EVENT_LOOP_START_TIMEOUT} seconds"
+                )
+
+            if self._loop_start_error:
+                raise RuntimeError(
+                    "Failed to start the NATS event loop"
+                ) from self._loop_start_error
+            if not self._loop or not self._loop_thread or not self._loop_thread.is_alive():
+                raise RuntimeError("NATS event loop exited during startup")
             return self._loop
+
+    def _discard_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Discard a loop that closed immediately before coroutine submission."""
+        with self._lifecycle_lock:
+            if self._loop is loop:
+                self.nc = None
+                self.js = None
+                self._loop = None
+                self._loop_thread = None
+                self._loop_ready = None
+                self._loop_start_error = None
 
     def _run(self, coroutine: typing.Coroutine[typing.Any, typing.Any, typing.Any]) -> typing.Any:
         """Run a coroutine on the persistent NATS event loop."""
-        loop = self._ensure_event_loop()
-        return asyncio.run_coroutine_threadsafe(coroutine, loop).result()
+        for attempt in range(2):
+            try:
+                loop = self._ensure_event_loop()
+            except BaseException:
+                coroutine.close()
+                raise
+            try:
+                future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+            except RuntimeError:
+                if attempt or not loop.is_closed():
+                    coroutine.close()
+                    raise
+                self._discard_event_loop(loop)
+            else:
+                return future.result()
+
+        raise RuntimeError("Failed to submit coroutine to the NATS event loop")
 
     def publish(self, data: dict) -> None:  # noqa: D102
+        if self._pid != os.getpid():
+            self._reset_after_fork()
+
         msg = orjson.dumps(data, default=lambda obj: str(obj))
 
         with self._publish_lock:

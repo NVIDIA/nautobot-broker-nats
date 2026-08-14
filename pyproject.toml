@@ -33,6 +33,9 @@ requires      = ["uv_build>=0.11.18,<0.12"]
 module-name = "nautobot_broker_nats"
 module-root = ""
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.pylint.main]
 analyse-fallback-blocks = "no"
 ignore=".venv"
