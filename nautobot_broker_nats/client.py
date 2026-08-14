@@ -16,8 +16,11 @@ import orjson
 from .log import log
 
 EVENT_LOOP_START_TIMEOUT = 5
+# Keep worker shutdown bounded even though nats-py's default drain timeout is
+# longer. A worker recycle must not wait indefinitely to flush a connection.
 DISCONNECT_TIMEOUT = 5
 EVENT_LOOP_STOP_TIMEOUT = 5
+PUBLISH_TIMEOUT = 60
 
 
 class NATS:
@@ -29,12 +32,17 @@ class NATS:
         servers: typing.Iterable[str] = ["nats://127.0.0.1:4222"],
         stream: typing.Optional[str] = None,
         subject: str = "nautobot",
+        publish_timeout: float = PUBLISH_TIMEOUT,
         **kwargs,
     ) -> None:
         self.attempt = attempt
         self.servers = servers
         self.stream = stream
         self.subject = subject
+        self.publish_timeout = publish_timeout
+
+        if self.publish_timeout <= 0:
+            raise ValueError("publish_timeout must be greater than zero")
 
         # All other arguments are treated as connection parameters.
         self.connect = kwargs
@@ -93,6 +101,9 @@ class NATS:
                 future = asyncio.run_coroutine_threadsafe(coroutine, loop)
                 future.result(timeout=DISCONNECT_TIMEOUT)
             except concurrent.futures.TimeoutError:
+                # run_coroutine_threadsafe chains cancellation from this
+                # future to the asyncio task. Event-loop teardown below also
+                # cancels any task that has not observed cancellation yet.
                 future.cancel()
                 log.warning("disconnect timed out after %s seconds", DISCONNECT_TIMEOUT)
             except Exception as exc:  # Best-effort cleanup, especially during atexit.
@@ -233,7 +244,12 @@ class NATS:
                 raise RuntimeError(
                     "Failed to start the NATS event loop"
                 ) from self._loop_start_error
-            if not self._loop or not self._loop_thread or not self._loop_thread.is_alive():
+            if (
+                not self._loop
+                or self._loop.is_closed()
+                or not self._loop_thread
+                or not self._loop_thread.is_alive()
+            ):
                 raise RuntimeError("NATS event loop exited during startup")
             return self._loop
 
@@ -248,9 +264,14 @@ class NATS:
                 self._loop_ready = None
                 self._loop_start_error = None
 
-    def _run(self, coroutine: typing.Coroutine[typing.Any, typing.Any, typing.Any]) -> typing.Any:
+    def _run(
+        self,
+        coroutine: typing.Coroutine[typing.Any, typing.Any, typing.Any],
+        timeout: float,
+    ) -> typing.Any:
         """Run a coroutine on the persistent NATS event loop."""
-        for attempt in range(2):
+        retry_closed_loop = True
+        while True:
             try:
                 loop = self._ensure_event_loop()
             except BaseException:
@@ -259,14 +280,21 @@ class NATS:
             try:
                 future = asyncio.run_coroutine_threadsafe(coroutine, loop)
             except RuntimeError:
-                if attempt or not loop.is_closed():
+                if not retry_closed_loop or not loop.is_closed():
                     coroutine.close()
                     raise
+                retry_closed_loop = False
                 self._discard_event_loop(loop)
             else:
-                return future.result()
-
-        raise RuntimeError("Failed to submit coroutine to the NATS event loop")
+                try:
+                    return future.result(timeout=timeout)
+                except concurrent.futures.TimeoutError:
+                    # A coroutine may itself raise TimeoutError. Only cancel
+                    # here when the submitted operation is still incomplete.
+                    if future.done():
+                        raise
+                    future.cancel()
+                    raise TimeoutError(f"NATS publish timed out after {timeout} seconds") from None
 
     def publish(self, data: dict) -> None:  # noqa: D102
         if self._pid != os.getpid():
@@ -275,7 +303,7 @@ class NATS:
         msg = orjson.dumps(data, default=lambda obj: str(obj))
 
         with self._publish_lock:
-            self._run(self._publish(msg))
+            self._run(self._publish(msg), timeout=self.publish_timeout)
 
     async def _connect(self) -> None:
         # Connect to NATS.
@@ -302,7 +330,7 @@ class NATS:
                 try:
                     await self.nc.close()
                 except Exception as e:
-                    log.warning("disconnect: %s" % e)
+                    log.warning("disconnect: %s", e)
 
         self.nc = None
         self.js = None
@@ -333,7 +361,7 @@ class NATS:
                     await self.nc.flush()
 
             except Exception as e:
-                log.warning("publish [%d]: %s" % (n, e))
+                log.warning("publish [%d]: %s", n, e)
 
                 # Force a reconnect before the next attempt.
                 await self._disconnect()

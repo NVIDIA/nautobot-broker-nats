@@ -153,11 +153,16 @@ def test_disconnect_before_publish_is_idempotent():
 def test_disconnect_timeout_still_stops_event_loop(monkeypatch, caplog):
     """Bound shutdown if draining an unreachable connection does not finish."""
     drain_started = threading.Event()
+    drain_cancelled = threading.Event()
 
     class HangingConnection(FakeConnection):
         async def drain(self):
             drain_started.set()
-            await asyncio.Event().wait()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                drain_cancelled.set()
+                raise
 
     async def connect(**_kwargs):
         return HangingConnection([])
@@ -172,10 +177,52 @@ def test_disconnect_timeout_still_stops_event_loop(monkeypatch, caplog):
         broker.disconnect()
 
     assert drain_started.is_set()
+    assert drain_cancelled.wait(timeout=1)
     assert "disconnect timed out" in caplog.text
     assert loop_thread is not None
     assert not loop_thread.is_alive()
     assert broker._loop is None  # pylint: disable=protected-access
+
+
+def test_publish_timeout_cancels_running_coroutine(monkeypatch):
+    """Bound a publish and propagate cancellation to its asyncio task."""
+    publish_started = threading.Event()
+    publish_cancelled = threading.Event()
+
+    class HangingJetStream(FakeJetStream):
+        async def publish(self, subject, message, headers):
+            publish_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                publish_cancelled.set()
+                raise
+
+    class HangingConnection(FakeConnection):
+        def __init__(self):
+            super().__init__([])
+            self._jetstream = HangingJetStream(self, [])
+
+    async def connect(**_kwargs):
+        return HangingConnection()
+
+    monkeypatch.setattr(client_module.nats, "connect", connect)
+    broker = client_module.NATS(stream="nautobot", publish_timeout=0.01)
+
+    try:
+        with pytest.raises(TimeoutError, match="NATS publish timed out"):
+            broker.publish({"event": "test"})
+
+        assert publish_started.is_set()
+        assert publish_cancelled.wait(timeout=1)
+    finally:
+        broker.disconnect()
+
+
+def test_publish_timeout_must_be_positive():
+    """Reject a timeout that cannot provide a usable publish budget."""
+    with pytest.raises(ValueError, match="greater than zero"):
+        client_module.NATS(publish_timeout=0)
 
 
 def test_pid_mismatch_replaces_inherited_locked_state(monkeypatch):
@@ -265,6 +312,25 @@ def test_closed_loop_submission_is_retried_once(monkeypatch):
 
     assert calls == 2
     assert [message for _, message, _ in published] == [b'{"event":"test"}']
+
+
+def test_ensure_event_loop_does_not_return_closed_loop():
+    """Revalidate loop state after a previously completed readiness wait."""
+    broker = client_module.NATS(stream="nautobot")
+    closed_loop = asyncio.new_event_loop()
+    closed_loop.close()
+    ready = threading.Event()
+    ready.set()
+    broker._loop = closed_loop  # pylint: disable=protected-access
+    broker._loop_thread = threading.current_thread()  # pylint: disable=protected-access
+    broker._loop_ready = ready  # pylint: disable=protected-access
+
+    try:
+        with pytest.raises(RuntimeError, match="exited during startup"):
+            broker._ensure_event_loop()  # pylint: disable=protected-access
+    finally:
+        broker._reset_after_fork()  # pylint: disable=protected-access
+        broker.disconnect()
 
 
 def test_disconnect_called_from_event_loop_does_not_deadlock(monkeypatch):
