@@ -2,4 +2,18 @@
 #  SPDX-License-Identifier: APACHE 2.0
 """This plugin formats and publishes changelog events to a NATs queue."""
 
-from .broker import NATSEventBroker as NATSEventBroker
+import typing
+
+if typing.TYPE_CHECKING:
+    from .broker import NATSEventBroker as NATSEventBroker
+
+__all__ = ["NATSEventBroker"]
+
+
+def __getattr__(name: str) -> typing.Any:
+    """Load the Nautobot-dependent broker only when it is requested."""
+    if name == "NATSEventBroker":
+        from .broker import NATSEventBroker
+
+        return NATSEventBroker
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

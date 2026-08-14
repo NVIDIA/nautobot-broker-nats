@@ -18,11 +18,15 @@ runs:
 
     - name: "Check formatting with ruff"
       shell: bash
-      run: uv run ruff format --check nautobot_broker_nats/
+      run: uv run ruff format --check nautobot_broker_nats/ tests/
 
     - name: "Lint with ruff"
       shell: bash
-      run: uv run ruff check nautobot_broker_nats/
+      run: uv run ruff check nautobot_broker_nats/ tests/
+
+    - name: "Run tests"
+      shell: bash
+      run: uv run pytest
 
     - name: "Lock Check"
       shell: bash
