@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: APACHE 2.0
 
 import asyncio
+import gc
 import logging
 import os
 import threading
+import weakref
 
 import pytest
 
@@ -110,7 +112,7 @@ def test_event_loop_start_failure_releases_waiter(monkeypatch):
     def fail_to_create_loop():
         raise OSError("event loop unavailable")
 
-    monkeypatch.setattr(client_module.asyncio, "new_event_loop", fail_to_create_loop)
+    monkeypatch.setattr(client_module, "_new_event_loop", fail_to_create_loop)
     broker = client_module.NATS(stream="nautobot")
 
     with pytest.raises(RuntimeError, match="Failed to start") as exc_info:
@@ -148,6 +150,20 @@ def test_disconnect_before_publish_is_idempotent():
 
     assert broker._loop is None  # pylint: disable=protected-access
     assert broker._loop_thread is None  # pylint: disable=protected-access
+
+
+def test_process_hooks_do_not_retain_client_instances():
+    """Allow short-lived clients to be collected despite process hooks."""
+
+    def create_client_reference():
+        broker = client_module.NATS(stream="nautobot")
+        assert broker in client_module._INSTANCES  # pylint: disable=protected-access
+        return weakref.ref(broker)
+
+    broker_reference = create_client_reference()
+    gc.collect()
+
+    assert broker_reference() is None
 
 
 def test_disconnect_timeout_still_stops_event_loop(monkeypatch, caplog):

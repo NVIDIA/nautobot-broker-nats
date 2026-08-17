@@ -9,6 +9,7 @@ import os
 import threading
 import typing
 import uuid
+import weakref
 
 import nats
 import orjson
@@ -21,6 +22,31 @@ EVENT_LOOP_START_TIMEOUT = 5
 DISCONNECT_TIMEOUT = 5
 EVENT_LOOP_STOP_TIMEOUT = 5
 PUBLISH_TIMEOUT = 60
+
+
+_INSTANCES: weakref.WeakSet["NATS"] = weakref.WeakSet()
+
+
+def _new_event_loop() -> asyncio.AbstractEventLoop:
+    """Create an event loop through a module-local test seam."""
+    return asyncio.new_event_loop()
+
+
+def _reset_instances_after_fork() -> None:
+    """Reset every live client inherited by a forked child process."""
+    for instance in list(_INSTANCES):
+        instance._reset_after_fork()
+
+
+def _disconnect_instances_at_exit() -> None:
+    """Disconnect every client that is still live at process exit."""
+    for instance in list(_INSTANCES):
+        instance.disconnect()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_instances_after_fork)
+atexit.register(_disconnect_instances_at_exit)
 
 
 class NATS:
@@ -36,10 +62,10 @@ class NATS:
         **kwargs,
     ) -> None:
         self.attempt = attempt
+        self.publish_timeout = publish_timeout
         self.servers = servers
         self.stream = stream
         self.subject = subject
-        self.publish_timeout = publish_timeout
 
         if self.publish_timeout <= 0:
             raise ValueError("publish_timeout must be greater than zero")
@@ -48,28 +74,23 @@ class NATS:
         self.connect = kwargs
 
         # Initialize the NATS connection and JetStream context.
-        self.nc = None
         self.js = None
+        self.nc = None
 
         # nats-py schedules keepalives and reconnect handling on its asyncio
         # event loop. Keep that loop running between synchronous publish calls
         # so an idle connection can process server pings and disconnects.
+        self._lifecycle_lock = threading.Lock()
         self._loop = None
-        self._loop_thread = None
         self._loop_ready = None
         self._loop_start_error = None
-        self._publish_lock = threading.Lock()
-        self._lifecycle_lock = threading.Lock()
+        self._loop_thread = None
         self._pid = os.getpid()
+        self._publish_lock = threading.Lock()
 
-        # Application servers such as uWSGI may import this module before
-        # forking workers. Threads and event loops do not survive a fork, so
-        # reset process-local state in the child and reconnect lazily.
-        if hasattr(os, "register_at_fork"):
-            os.register_at_fork(after_in_child=self._reset_after_fork)
-
-        # Ensure a graceful disconnect on process exit.
-        atexit.register(self.disconnect)
+        # Module-level process hooks retain only a weak reference to this
+        # client, so short-lived instances can still be garbage-collected.
+        _INSTANCES.add(self)
 
     def disconnect(self) -> None:  # noqa: D102
         if self._pid != os.getpid():
@@ -87,12 +108,12 @@ class NATS:
                 loop = self._loop
                 loop_thread = self._loop_thread
                 if not loop or not loop_thread or not loop_thread.is_alive():
-                    self.nc = None
-                    self.js = None
                     self._loop = None
-                    self._loop_thread = None
                     self._loop_ready = None
                     self._loop_start_error = None
+                    self._loop_thread = None
+                    self.js = None
+                    self.nc = None
                     return
 
             future = None
@@ -125,13 +146,13 @@ class NATS:
 
                 with self._lifecycle_lock:
                     if self._loop is loop:
-                        self.nc = None
-                        self.js = None
                         self._loop = None
+                        self.js = None
+                        self.nc = None
                     if self._loop_thread is loop_thread:
-                        self._loop_thread = None
                         self._loop_ready = None
                         self._loop_start_error = None
+                        self._loop_thread = None
 
     def _disconnect_from_event_loop(self) -> None:
         """Disconnect without blocking when called by the event loop thread."""
@@ -152,21 +173,21 @@ class NATS:
         # Do not drain the inherited connection: protocol I/O from the child
         # would use the parent's underlying socket. Drop process-local object
         # state and let the child establish its own connection lazily.
-        self.nc = None
-        self.js = None
+        self._lifecycle_lock = threading.Lock()
         self._loop = None
-        self._loop_thread = None
         self._loop_ready = None
         self._loop_start_error = None
-        self._publish_lock = threading.Lock()
-        self._lifecycle_lock = threading.Lock()
+        self._loop_thread = None
         self._pid = os.getpid()
+        self._publish_lock = threading.Lock()
+        self.js = None
+        self.nc = None
 
     def _run_event_loop(self, ready: threading.Event) -> None:
         """Run the nats-py event loop until disconnect stops it."""
         loop = None
         try:
-            loop = asyncio.new_event_loop()
+            loop = _new_event_loop()
             asyncio.set_event_loop(loop)
             self._loop = loop
         except BaseException as exc:  # Always release a waiter if thread setup fails.
@@ -193,12 +214,12 @@ class NATS:
                 loop.close()
                 with self._lifecycle_lock:
                     if self._loop is loop:
-                        self.nc = None
-                        self.js = None
                         self._loop = None
+                        self.js = None
+                        self.nc = None
                     if self._loop_thread is threading.current_thread():
-                        self._loop_thread = None
                         self._loop_ready = None
+                        self._loop_thread = None
 
     def _ensure_event_loop(self) -> asyncio.AbstractEventLoop:
         """Start the process-local event loop thread when first needed."""
@@ -220,10 +241,10 @@ class NATS:
                 # A connection belongs to the loop that created it. If that
                 # loop exited unexpectedly, discard its connection state rather
                 # than attempting to reuse it from the replacement loop.
-                self.nc = None
-                self.js = None
                 self._loop = None
                 self._loop_start_error = None
+                self.js = None
+                self.nc = None
 
                 ready = threading.Event()
                 self._loop_ready = ready
@@ -257,12 +278,12 @@ class NATS:
         """Discard a loop that closed immediately before coroutine submission."""
         with self._lifecycle_lock:
             if self._loop is loop:
-                self.nc = None
-                self.js = None
                 self._loop = None
-                self._loop_thread = None
                 self._loop_ready = None
                 self._loop_start_error = None
+                self._loop_thread = None
+                self.js = None
+                self.nc = None
 
     def _run(
         self,
@@ -332,8 +353,8 @@ class NATS:
                 except Exception as e:
                     log.warning("disconnect: %s", e)
 
-        self.nc = None
         self.js = None
+        self.nc = None
 
     # Publish the message, retrying if necessary with an increasing delay
     # between attempts.
