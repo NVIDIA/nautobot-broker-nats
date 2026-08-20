@@ -15,7 +15,7 @@ description     = "Publish changes to NATS"
 name            = "nautobot-broker-nats"
 readme          = "README.md"
 requires-python = ">=3.11,<4.0"
-version         = "1.2.3"
+version         = "1.2.4"
 
 [dependency-groups]
 dev = [
