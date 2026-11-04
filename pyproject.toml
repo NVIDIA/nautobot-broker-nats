@@ -19,7 +19,7 @@ version         = "1.2.4"
 
 [dependency-groups]
 dev = [
-    "pylint>=3.3,<4.0",
+    "pylint>=4.0.9,<4.1",
     "pylint-django>=2.6,<3.0",
     "pytest>=8.3,<9.0",
     "ruff>=0.9,<0.10",
